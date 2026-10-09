@@ -1,5 +1,5 @@
 ---
-status: "proposed"
+status: accepted
 date: 2026-10-09
 decision-makers: "Samuel Guedes"
 consulted: ""
@@ -126,3 +126,4 @@ Other rules:
 
 * Depends on [ADR 0002](0002-use-cassandra-as-the-key-db-for-the-key-generation-service.md) and [ADR 0003](0003-use-quorum-consistency-for-cassandra-reads-and-writes.md). Both are amended by a dated note (see their More Information sections).
 * Revisit if: measured storage for claim rows is too high, if a purge of very old claim rows becomes acceptable (for example after the code space is large enough to make a collision with an old link negligible), or if product requirements add a reuse policy.
+
