@@ -36,7 +36,7 @@ url_shortener/            (umbrella)
 │   ├── click_consumer    Kafka -> aggregate -> ClickHouse
 │   └── analytics_api     GET /stats/{code}
 ├── dashboard/            React or Vue SPA (not an Elixir app)
-├── docker-compose.yml    2 nginx LBs, Redis, Cassandra, Kafka, ClickHouse, Key DB, services
+├── docker-compose.yml    2 nginx LBs, Redis, Cassandra (with the `kgs` keyspace as the Key DB), Kafka, ClickHouse, services
 └── docs/adr/             one decision per file
 ```
 
@@ -47,35 +47,36 @@ url_shortener/            (umbrella)
 ## 3. Data model
 
 Cassandra `urls` table:
-- Partition key `code` (7-char base62). Columns: `long_url`, `created_at`, `owner_id`, `is_custom_alias`.
-- Rows are written `USING TTL` (default 10 years, or the user's expiry).
-- Keyspace replication factor comes from config (RF=3 in production, RF=1 locally).
+- Partition key `code` (7-char base62). Columns: `long_url`, `created_at`, `owner_id`, `is_custom_alias`, `expires_at`.
+- The row is claimed once with no TTL. Only `long_url` is written `USING TTL` (default 10 years, or the user's expiry), so a code is never reused after its link expires (ADR 0004).
+- Keyspace replication factor comes from config (RF=3 in production, RF=1 locally). Reads and writes use QUORUM (ADR 0003).
 
 ## 4. Write path (`POST /urls`)
 
 1. Edge rate limiter checks the Redis token bucket; 429 when the quota is spent.
 2. `write_api` validates the URL and runs the safety check.
-3. Generated code: take a key from the local batch; when exhausted, request a new batch from KGS. Then `INSERT ... IF NOT EXISTS` at QUORUM.
-4. Custom alias: skip KGS, use `INSERT ... IF NOT EXISTS` (LWT); a clash returns 409.
-5. Respond 201 with the short URL. No deduplication: the same long URL gets a new code each time.
+3. Generated code: take a key from the local batch; when exhausted, request a new batch from KGS. Then claim the code with `INSERT ... IF NOT EXISTS` (no TTL), followed by `UPDATE ... USING TTL` to store `long_url`, both at QUORUM (ADR 0003, ADR 0004). If a generated key clashes with an existing custom alias, discard it and take the next one, up to 3 retries, then 503 (ADR 0001).
+4. Custom alias: skip KGS, use the same two-step write; a clash on the claim returns 409.
+5. Respond 201 with the short URL only after both steps succeed, and delete any negative-cache entry for the code. No deduplication: the same long URL gets a new code each time.
 
 ## 5. Read path (`GET /{code}`)
 
-1. Redis lookup (LRU, cache-aside). A hit returns 302.
-2. A miss reads Cassandra at QUORUM and fills the cache; cache TTL is capped by the row's remaining TTL. Unknown codes return 404 and get a short negative-cache entry.
-3. Fire-and-forget click event to Kafka, off the request's critical path. If Kafka is down, the redirect still succeeds; the dropped event is counted in a metric.
+1. Redis lookup (LRU, cache-aside). A hit returns 302 with `Cache-Control: no-store` (ADR 0006).
+2. A miss reads Cassandra at QUORUM and fills the cache; cache TTL is capped by the remaining TTL of `long_url`. A row with no `long_url` returns 410 (expired, ADR 0004). Unknown codes return 404. Both get a short negative-cache entry and `no-store`. If quorum is unavailable, return 503 and cache nothing (ADR 0003).
+3. Fire-and-forget click event to Kafka, off the request's critical path. If Kafka is down, the redirect still succeeds; the dropped event is counted in a metric (ADR 0005).
 
 ## 6. KGS
 
-- The Key DB records batches (`batch_id`, key set or range, status, owner).
-- `write_api` takes batches of about 1,000 keys. KGS marks a batch used before handing it out, so a crash wastes keys but never reuses them.
-- Active and standby nodes; the standby takes over through a lease stored in the Key DB.
+- The Key DB is a separate Cassandra keyspace (`kgs`) with `batches`, `free_batches`, `issued_keys` and `lease` tables (ADR 0002). Batches hold random keys, kept unique across batches by `issued_keys`, which has no TTL.
+- A replenisher on the active node keeps the pool of free batches above a low-water mark.
+- `write_api` takes batches of about 1,000 keys. KGS marks a batch used with a conditional update before handing it out, so a crash wastes keys but never reuses them (ADR 0001).
+- Active and standby nodes; the standby takes over through a lease row with a TTL in the Key DB (default 10 s).
 
 ## 7. Analytics pipeline
 
 - Redirect API publishes `{code, ts, referrer, country, user_agent_class}` to a Kafka topic partitioned by `code`.
 - `click_consumer` is a Broadway pipeline. It batches events and writes aggregates to ClickHouse (a `SummingMergeTree` table of clicks per code per hour). Offsets are committed only after a successful insert (at-least-once).
-- `analytics_api` serves `GET /stats/{code}` with totals and a time series. Counts are documented as approximate because delivery can duplicate events (ADR).
+- `analytics_api` serves `GET /stats/{code}` with totals and a time series. Counts are documented as approximate because events can be dropped at the producer and replayed after a consumer crash (ADR 0005). The stats response says so.
 
 ## 8. Rate limiting
 
@@ -89,7 +90,7 @@ A `SafetyChecker` behaviour called by `write_api`. Local rule-based implementati
 
 | Failure | Behaviour |
 |---|---|
-| Cassandra down | Writes return 503; reads still served from cache |
+| Cassandra down (or below quorum) | Writes return 503; cache hits still redirect; cache misses return 503, not 404 (ADR 0003) |
 | Redis down | Reads go straight to Cassandra; rate limiter fails open; metrics record both |
 | Kafka down | Redirects unaffected; dropped events counted |
 | KGS down | `write_api` serves from its remaining batch, then 503 for generated codes; custom aliases still work |
