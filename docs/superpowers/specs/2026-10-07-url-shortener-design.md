@@ -104,13 +104,15 @@ Telemetry and Prometheus metrics: cache hit ratio, redirect latency, KGS batch u
 - Unit tests (test-first): base62, token bucket logic, URL validation.
 - Integration tests against real Cassandra, Redis, Kafka and ClickHouse via Docker Compose, tagged so they can be excluded.
 - Contract tests for the `KeySource` and `SafetyChecker` behaviours.
+- Integration checks taken from the ADR verification lists: concurrent batch claims never overlap (ADR 0002), a code is never reissued after expiry (ADR 0004), 302 with `no-store` and 410 for expired links (ADR 0004, ADR 0006), and a redirect still succeeds with Kafka down (ADR 0005).
+- A read-your-writes check across replicas (ADR 0003) needs RF=3. Local runs use RF=1, so this check is marked unverified in the README unless a multi-node setup is available.
 - End-to-end smoke script: create a URL, redirect, produce a click, read the stats.
 - k6 load test on the redirect path; results recorded in the README.
 
 ## 13. Milestones (build order)
 
 1. Core path: write, redirect, cache, Cassandra, Compose, test scaffolding, `KeySource` with the in-process generator.
-2. KGS and Key DB, including standby.
+2. KGS and Key DB (the `kgs` keyspace, batch replenisher, `issued_keys`), including standby.
 3. Rate limiting.
 4. Analytics pipeline and stats API.
 5. Dashboard and URL safety check.
