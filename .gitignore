@@ -1,0 +1,6 @@
+# Mix build output and dependencies
+/_build/
+/deps/
+*.ez
+erl_crash.dump
+.elixir_ls/
