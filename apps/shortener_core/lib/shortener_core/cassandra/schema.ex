@@ -16,6 +16,10 @@ defmodule ShortenerCore.Cassandra.Schema do
       raise ArgumentError, "invalid keyspace name: #{inspect(keyspace)}"
     end
 
+    if not (is_integer(replication_factor) and replication_factor > 0) do
+      raise ArgumentError, "invalid replication factor: #{inspect(replication_factor)}"
+    end
+
     [
       """
       CREATE KEYSPACE IF NOT EXISTS #{keyspace}

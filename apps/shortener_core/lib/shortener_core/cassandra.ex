@@ -11,6 +11,7 @@ defmodule ShortenerCore.Cassandra do
   @doc "Name the connection is registered under."
   def conn, do: @conn
 
+  # Limitation: one node only, because plain Xandra.start_link raises on several (Xandra.Cluster is planned for milestone 2).
   @doc "Child spec for the supervision tree. `opts` override the application config."
   def child_spec(opts \\ []) do
     config = Keyword.merge(config(), opts)

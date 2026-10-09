@@ -1,7 +1,7 @@
 defmodule ShortenerCore.UrlStore.Memory do
   @moduledoc """
   In-memory `UrlStore` for unit tests. Start it with `start_supervised!(ShortenerCore.UrlStore.Memory)`.
-  TTL expiry is checked on read against the system clock, like Cassandra's.
+  TTL expiry is checked on read against the monotonic clock, like Cassandra's.
   """
 
   @behaviour ShortenerCore.UrlStore

@@ -112,6 +112,20 @@ defmodule WriteApi.UrlControllerTest do
       assert %{"code" => "fresh01"} = json_response(conn, 201)
     end
 
+    test "succeeds on the third attempt after two clashes" do
+      start_supervised!({ScriptedKeySource, ["aaa0001", "aaa0002", "fresh02"]})
+
+      for alias_name <- ["aaa0001", "aaa0002"] do
+        assert json_response(
+                 post_json(%{"url" => "https://example.com", "custom_alias" => alias_name}),
+                 201
+               )
+      end
+
+      conn = post_json(%{"url" => "https://example.com/other"})
+      assert %{"code" => "fresh02"} = json_response(conn, 201)
+    end
+
     test "returns 503 after 3 clashes in a row" do
       start_supervised!({ScriptedKeySource, ["aaa0001", "aaa0002", "aaa0003", "fresh01"]})
 
@@ -199,6 +213,9 @@ defmodule WriteApi.UrlControllerTest do
           {"an alias with a space", "a b"},
           {"a reserved alias", "health"},
           {"a reserved alias in another case", "URLS"},
+          {"a reserved alias, lowercase", "stats"},
+          {"a reserved future route", "metrics"},
+          {"a reserved future route in mixed case", "Dashboard"},
           {"a non-string alias", 42}
         ] do
       test "rejects #{name} with 422 invalid_alias" do
@@ -222,6 +239,11 @@ defmodule WriteApi.UrlControllerTest do
         body = %{"url" => "https://example.com", "ttl_seconds" => unquote(ttl)}
         assert %{"error" => "invalid_ttl"} = json_response(post_json(body), 422)
       end
+    end
+
+    test "does not read the url from the query string" do
+      conn = post(build_conn(), "/urls?url=https://example.com")
+      assert %{"error" => "invalid_url"} = json_response(conn, 422)
     end
 
     test "rejects a JSON array body" do

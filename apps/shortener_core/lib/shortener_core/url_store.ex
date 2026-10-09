@@ -5,6 +5,10 @@ defmodule ShortenerCore.UrlStore do
     1. `claim/1` reserves the code permanently (no TTL).
     2. `put_destination/3` stores `long_url` with a TTL.
 
+  `put_destination/3` must only be called after a successful `claim/1`: without a claim,
+  Cassandra would create a row with no row marker that disappears at expiry and would make the
+  code claimable again (ADR 0004).
+
   Implementation chosen by `config :shortener_core, :url_store`.
   """
 

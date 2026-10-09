@@ -8,8 +8,9 @@ defmodule WriteApi.LinkParams do
 
   @max_url_length 2_048
   @alias_format ~r/\A[0-9A-Za-z_-]{3,32}\z/
-  # Paths the services own, so an alias must not shadow them.
-  @reserved_aliases ~w(health urls stats)
+  # Paths the services own, so an alias must not shadow them. Codes are permanent (ADR 0004),
+  # so this also reserves names that later milestones may route.
+  @reserved_aliases ~w(health urls stats metrics dashboard api admin static assets)
   # Whitespace and control characters: they would break, or inject into, the Location header.
   @forbidden_in_url ~r/[\x00-\x20\x7f]/
 

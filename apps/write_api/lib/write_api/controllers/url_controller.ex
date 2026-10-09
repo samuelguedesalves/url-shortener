@@ -3,8 +3,9 @@ defmodule WriteApi.UrlController do
 
   alias WriteApi.Shortener
 
-  def create(conn, params) do
-    case Shortener.create(params) do
+  # Only the request body is read; query-string parameters are ignored.
+  def create(conn, _params) do
+    case Shortener.create(conn.body_params) do
       {:ok, link} ->
         conn |> put_status(:created) |> json(link)
 

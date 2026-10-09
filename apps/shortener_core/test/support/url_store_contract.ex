@@ -69,10 +69,10 @@ defmodule ShortenerCore.UrlStoreContract do
       test "after the TTL the destination is gone but the code stays claimed (ADR 0004)" do
         url = new_url()
         assert @store.claim(url) == :ok
-        assert @store.put_destination(url.code, "https://example.com", 1) == :ok
+        assert @store.put_destination(url.code, "https://example.com", 2) == :ok
         assert {:ok, %Url{long_url: "https://example.com"}} = @store.fetch(url.code)
 
-        Process.sleep(1_500)
+        Process.sleep(2_500)
 
         assert {:ok, %Url{long_url: nil}} = @store.fetch(url.code)
         assert @store.claim(url) == {:error, :taken}

@@ -9,6 +9,8 @@ defmodule ShortenerCore.UrlStore.Cassandra do
 
   @behaviour ShortenerCore.UrlStore
 
+  require Logger
+
   alias ShortenerCore.{Cassandra, Url}
 
   @claim """
@@ -34,8 +36,9 @@ defmodule ShortenerCore.UrlStore.Cassandra do
           _ -> {:error, :taken}
         end
 
-      {:error, _} ->
+      {:error, error} ->
         # A timed-out claim may or may not have applied; the caller treats the code as burned.
+        log_error("claim", url.code, error)
         {:error, :unavailable}
     end
   end
@@ -43,8 +46,12 @@ defmodule ShortenerCore.UrlStore.Cassandra do
   @impl true
   def put_destination(code, long_url, ttl) do
     case execute(@put_destination, [ttl, long_url, code], []) do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, :unavailable}
+      {:ok, _} ->
+        :ok
+
+      {:error, error} ->
+        log_error("put_destination", code, error)
+        {:error, :unavailable}
     end
   end
 
@@ -57,14 +64,27 @@ defmodule ShortenerCore.UrlStore.Cassandra do
           [row] -> {:ok, to_url(row)}
         end
 
-      {:error, _} ->
+      {:error, error} ->
+        log_error("fetch", code, error)
         {:error, :unavailable}
     end
   end
 
+  defp log_error(operation, code, error) do
+    Logger.warning(
+      "UrlStore.Cassandra #{operation} failed for code #{code}: #{error_message(error)}"
+    )
+  end
+
+  defp error_message(error) when is_exception(error), do: Exception.message(error)
+  defp error_message(error), do: inspect(error)
+
   defp execute(statement, params, opts) do
-    with {:ok, prepared} <- Xandra.prepare(Cassandra.conn(), statement) do
-      Xandra.execute(Cassandra.conn(), prepared, params, opts)
+    # ADR 0003: bound every call so a frozen or partitioned node yields 503, not a hang.
+    timeout = Application.fetch_env!(:shortener_core, :cassandra_timeout)
+
+    with {:ok, prepared} <- Xandra.prepare(Cassandra.conn(), statement, timeout: timeout) do
+      Xandra.execute(Cassandra.conn(), prepared, params, [timeout: timeout] ++ opts)
     end
   end
 

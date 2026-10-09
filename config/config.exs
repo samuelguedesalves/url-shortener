@@ -9,6 +9,8 @@ config :shortener_core,
   start_clients: true,
   cassandra: [nodes: ["127.0.0.1:9042"], keyspace: "shortener", replication_factor: 1],
   redis_url: "redis://127.0.0.1:6379",
+  # Milliseconds. Client-side timeout on every Cassandra call, so a stuck node gives 503 (ADR 0003).
+  cassandra_timeout: 5_000,
   # Seconds. 10 years is the default and the maximum link lifetime (ADR 0004).
   default_link_ttl: 315_360_000,
   max_link_ttl: 315_360_000,

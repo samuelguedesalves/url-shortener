@@ -89,6 +89,29 @@ defmodule RedirectApi.RedirectControllerTest do
       assert Cache.Memory.ttl("long001") == Application.fetch_env!(:shortener_core, :cache_ttl)
     end
 
+    for {code, offset} <- [{"exp0001", 0}, {"exp0002", -5}] do
+      test "redirects but does not cache a link with under a second left (#{code})" do
+        now = DateTime.utc_now()
+
+        :ok =
+          UrlStore.claim(%Url{
+            code: unquote(code),
+            owner_id: nil,
+            is_custom_alias: false,
+            created_at: now,
+            expires_at: DateTime.add(now, unquote(offset), :second)
+          })
+
+        :ok = UrlStore.put_destination(unquote(code), "https://example.com/soon", 3_600)
+
+        conn = get(build_conn(), "/" <> unquote(code))
+
+        assert conn.status == 302
+        assert get_resp_header(conn, "location") == ["https://example.com/soon"]
+        assert Cache.get(unquote(code)) == :miss
+      end
+    end
+
     test "answers HEAD like GET without a body" do
       create_link("abc1234", "https://example.com")
       conn = head(build_conn(), "/abc1234")
@@ -115,7 +138,7 @@ defmodule RedirectApi.RedirectControllerTest do
                Application.fetch_env!(:shortener_core, :negative_cache_ttl)
     end
 
-    for code <- ["a.b", "bad%20code", String.duplicate("a", 33), "%E2%82%AC"] do
+    for code <- ["a.b", "ab", "a", "bad%20code", String.duplicate("a", 33), "%E2%82%AC"] do
       test "returns 404 without touching the stores for #{inspect(code)}" do
         swap_env(:url_store, DownStore)
         conn = get(build_conn(), "/" <> unquote(code))
@@ -168,6 +191,16 @@ defmodule RedirectApi.RedirectControllerTest do
       :ok = Cache.put("hit0001", {:url, "https://example.com"}, 60)
       swap_env(:url_store, DownStore)
       assert get(build_conn(), "/hit0001").status == 302
+    end
+  end
+
+  describe "unmatched routes" do
+    for path <- ["/", "/a/b"] do
+      test "GET #{path} returns 404 with no-store" do
+        conn = get(build_conn(), unquote(path))
+        assert conn.status == 404
+        assert no_store?(conn)
+      end
     end
   end
 

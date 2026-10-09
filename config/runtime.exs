@@ -6,6 +6,10 @@ if config_env() != :test do
     |> System.get_env("127.0.0.1:9042")
     |> String.split(",", trim: true)
 
+  if length(nodes) > 1 do
+    raise "CASSANDRA_NODES lists #{length(nodes)} nodes, but the client supports one node until Xandra.Cluster is adopted (planned for milestone 2). Set a single host:port."
+  end
+
   config :shortener_core,
     cassandra: [
       nodes: nodes,
