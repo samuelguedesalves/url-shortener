@@ -26,6 +26,8 @@ defmodule WriteApi.Doubles do
     def put_destination(_code, _url, _ttl), do: {:error, :unavailable}
     @impl true
     def fetch(_code), do: {:error, :unavailable}
+    @impl true
+    def list_by_owner(_owner_id, _limit), do: {:error, :unavailable}
   end
 
   defmodule DestinationFailsStore do
@@ -38,6 +40,8 @@ defmodule WriteApi.Doubles do
     def put_destination(_code, _url, _ttl), do: {:error, :unavailable}
     @impl true
     def fetch(code), do: Memory.fetch(code)
+    @impl true
+    def list_by_owner(owner_id, limit), do: Memory.list_by_owner(owner_id, limit)
   end
 
   defmodule DownCache do

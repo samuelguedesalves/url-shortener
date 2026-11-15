@@ -34,6 +34,35 @@ defmodule ShortenerCore.Cassandra.Schema do
         created_at timestamp,
         expires_at timestamp
       )
+      """,
+      # An owner's links, newest first. Holds only the code: the destination and its TTL stay
+      # in `urls`, which is the single source of truth.
+      """
+      CREATE TABLE IF NOT EXISTS #{keyspace}.urls_by_user (
+        owner_id text,
+        created_at timestamp,
+        code text,
+        PRIMARY KEY ((owner_id), created_at, code)
+      ) WITH CLUSTERING ORDER BY (created_at DESC, code ASC)
+      """,
+      """
+      CREATE TABLE IF NOT EXISTS #{keyspace}.users (
+        id uuid PRIMARY KEY,
+        google_id text,
+        email text,
+        name text,
+        picture_url text,
+        email_verified boolean,
+        created_at timestamp,
+        updated_at timestamp
+      )
+      """,
+      # Lookup table for sign-in: Google `sub` to internal id, written first with IF NOT EXISTS.
+      """
+      CREATE TABLE IF NOT EXISTS #{keyspace}.users_by_google_id (
+        google_id text PRIMARY KEY,
+        user_id uuid
+      )
       """
     ]
   end

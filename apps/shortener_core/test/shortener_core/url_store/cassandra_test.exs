@@ -30,10 +30,14 @@ defmodule ShortenerCore.UrlStore.CassandraTest do
       capture_log(fn ->
         assert ShortenerCore.UrlStore.Cassandra.claim(url) == {:error, :unavailable}
         assert ShortenerCore.UrlStore.Cassandra.fetch(url.code) == {:error, :unavailable}
+
+        assert ShortenerCore.UrlStore.Cassandra.list_by_owner("owner-1", 50) ==
+                 {:error, :unavailable}
       end)
 
     assert log =~ "claim failed"
     assert log =~ "fetch failed"
+    assert log =~ "list_by_owner failed"
   end
 
   test "a tiny cassandra_timeout never hangs: the call returns or maps to {:error, :unavailable}" do

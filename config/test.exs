@@ -4,6 +4,7 @@ config :logger, level: :warning
 
 config :shortener_core,
   url_store: ShortenerCore.UrlStore.Memory,
+  user_store: ShortenerCore.UserStore.Memory,
   cache: ShortenerCore.Cache.Memory,
   start_clients: false,
   cassandra: [

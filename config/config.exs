@@ -4,6 +4,7 @@ config :logger, :default_formatter, metadata: [:request_id]
 
 config :shortener_core,
   url_store: ShortenerCore.UrlStore.Cassandra,
+  user_store: ShortenerCore.UserStore.Cassandra,
   cache: ShortenerCore.Cache.Redis,
   key_source: ShortenerCore.KeySource.InProcess,
   start_clients: true,

@@ -5,6 +5,10 @@ defmodule ShortenerCore.UrlStore.Cassandra do
   ADR 0004: `claim/1` is an `INSERT ... IF NOT EXISTS` with no TTL, `put_destination/3` is an
   `UPDATE ... USING TTL` on `long_url` only. ADR 0003: all statements run at QUORUM (the
   connection default); the conditional claim adds serial consistency SERIAL.
+
+  An owned link is also indexed in `urls_by_user`. That is a second statement, because a
+  conditional write cannot share a batch with a write to another partition. It runs only
+  after the claim applied, so the index never lists a code another link holds.
   """
 
   @behaviour ShortenerCore.UrlStore
@@ -20,6 +24,10 @@ defmodule ShortenerCore.UrlStore.Cassandra do
 
   @put_destination "UPDATE urls USING TTL ? SET long_url = ? WHERE code = ?"
 
+  @index_owner "INSERT INTO urls_by_user (owner_id, created_at, code) VALUES (?, ?, ?)"
+
+  @list_codes "SELECT code FROM urls_by_user WHERE owner_id = ? LIMIT ?"
+
   @fetch """
   SELECT code, long_url, owner_id, is_custom_alias, created_at, expires_at
   FROM urls WHERE code = ?
@@ -32,14 +40,13 @@ defmodule ShortenerCore.UrlStore.Cassandra do
     case execute(@claim, params, serial_consistency: :serial) do
       {:ok, page} ->
         case Enum.to_list(page) do
-          [%{"[applied]" => true}] -> :ok
+          [%{"[applied]" => true}] -> index_owner(url)
           _ -> {:error, :taken}
         end
 
       {:error, error} ->
         # A timed-out claim may or may not have applied; the caller treats the code as burned.
         log_error("claim", url.code, error)
-        {:error, :unavailable}
     end
   end
 
@@ -51,7 +58,6 @@ defmodule ShortenerCore.UrlStore.Cassandra do
 
       {:error, error} ->
         log_error("put_destination", code, error)
-        {:error, :unavailable}
     end
   end
 
@@ -66,14 +72,46 @@ defmodule ShortenerCore.UrlStore.Cassandra do
 
       {:error, error} ->
         log_error("fetch", code, error)
-        {:error, :unavailable}
+    end
+  end
+
+  @impl true
+  def list_by_owner(owner_id, limit) when is_integer(limit) and limit > 0 do
+    case execute(@list_codes, [owner_id, limit], []) do
+      {:ok, page} -> page |> Enum.map(& &1["code"]) |> fetch_all()
+      {:error, error} -> log_error("list_by_owner", "owner " <> owner_id, error)
+    end
+  end
+
+  defp index_owner(%Url{owner_id: nil}), do: :ok
+
+  defp index_owner(%Url{owner_id: owner_id, created_at: created_at, code: code}) do
+    case execute(@index_owner, [owner_id, created_at, code], []) do
+      {:ok, _} -> :ok
+      {:error, error} -> log_error("index_owner", code, error)
+    end
+  end
+
+  # `urls` is the source of truth, so each listed code is read from it. Every read is bounded by
+  # the Cassandra timeout, hence no extra task timeout. Order is the index order.
+  defp fetch_all(codes) do
+    codes
+    |> Task.async_stream(&fetch/1, max_concurrency: 10, timeout: :infinity)
+    |> Enum.reduce_while({:ok, []}, fn
+      {:ok, {:ok, url}}, {:ok, urls} -> {:cont, {:ok, [url | urls]}}
+      {:ok, :not_found}, acc -> {:cont, acc}
+      {:ok, {:error, :unavailable} = error}, _acc -> {:halt, error}
+    end)
+    |> case do
+      {:ok, urls} -> {:ok, Enum.reverse(urls)}
+      error -> error
     end
   end
 
   defp log_error(operation, code, error) do
-    Logger.warning(
-      "UrlStore.Cassandra #{operation} failed for code #{code}: #{error_message(error)}"
-    )
+    Logger.warning("UrlStore.Cassandra #{operation} failed for #{code}: #{error_message(error)}")
+
+    {:error, :unavailable}
   end
 
   defp error_message(error) when is_exception(error), do: Exception.message(error)

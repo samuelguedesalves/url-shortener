@@ -10,15 +10,18 @@ defmodule ShortenerCore.UrlStore.Memory do
 
   alias ShortenerCore.Url
 
-  def start_link(_opts \\ []), do: Agent.start_link(fn -> %{} end, name: __MODULE__)
+  def start_link(_opts \\ []) do
+    Agent.start_link(fn -> %{rows: %{}, owners: %{}} end, name: __MODULE__)
+  end
 
   @impl true
   def claim(%Url{code: code} = url) do
-    Agent.get_and_update(__MODULE__, fn rows ->
+    Agent.get_and_update(__MODULE__, fn %{rows: rows, owners: owners} = state ->
       if Map.has_key?(rows, code) do
-        {{:error, :taken}, rows}
+        {{:error, :taken}, state}
       else
-        {:ok, Map.put(rows, code, %{url: url, destination: nil})}
+        rows = Map.put(rows, code, %{url: url, destination: nil})
+        {:ok, %{state | rows: rows, owners: index(owners, url)}}
       end
     end)
   end
@@ -27,23 +30,50 @@ defmodule ShortenerCore.UrlStore.Memory do
   def put_destination(code, long_url, ttl) do
     deadline = System.monotonic_time(:millisecond) + ttl * 1_000
 
-    Agent.update(__MODULE__, fn rows ->
-      Map.update!(rows, code, &%{&1 | destination: {long_url, deadline}})
+    Agent.update(__MODULE__, fn %{rows: rows} = state ->
+      rows = Map.update!(rows, code, &%{&1 | destination: {long_url, deadline}})
+      %{state | rows: rows}
     end)
   end
 
   @impl true
   def fetch(code) do
-    Agent.get(__MODULE__, fn rows ->
+    Agent.get(__MODULE__, fn %{rows: rows} ->
       case Map.fetch(rows, code) do
-        :error ->
-          :not_found
-
-        {:ok, %{url: url, destination: destination}} ->
-          {:ok, %Url{url | long_url: live(destination)}}
+        :error -> :not_found
+        {:ok, row} -> {:ok, to_url(row)}
       end
     end)
   end
+
+  @impl true
+  def list_by_owner(owner_id, limit) do
+    Agent.get(__MODULE__, fn %{rows: rows, owners: owners} ->
+      urls =
+        owners
+        |> Map.get(owner_id, [])
+        |> Enum.map(&to_url(Map.fetch!(rows, &1)))
+        |> Enum.sort(&newest_first?/2)
+        |> Enum.take(limit)
+
+      {:ok, urls}
+    end)
+  end
+
+  defp index(owners, %Url{owner_id: nil}), do: owners
+
+  defp index(owners, %Url{owner_id: owner_id, code: code}),
+    do: Map.update(owners, owner_id, [code], &[code | &1])
+
+  defp newest_first?(a, b) do
+    case DateTime.compare(a.created_at, b.created_at) do
+      :gt -> true
+      :lt -> false
+      :eq -> a.code <= b.code
+    end
+  end
+
+  defp to_url(%{url: url, destination: destination}), do: %Url{url | long_url: live(destination)}
 
   defp live(nil), do: nil
 
