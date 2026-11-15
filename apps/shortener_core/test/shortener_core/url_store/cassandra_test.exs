@@ -31,7 +31,7 @@ defmodule ShortenerCore.UrlStore.CassandraTest do
         assert ShortenerCore.UrlStore.Cassandra.claim(url) == {:error, :unavailable}
         assert ShortenerCore.UrlStore.Cassandra.fetch(url.code) == {:error, :unavailable}
 
-        assert ShortenerCore.UrlStore.Cassandra.list_by_owner("owner-1", 50) ==
+        assert ShortenerCore.UrlStore.Cassandra.list_by_owner("owner-1", 50, nil) ==
                  {:error, :unavailable}
       end)
 

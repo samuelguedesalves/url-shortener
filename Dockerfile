@@ -14,4 +14,9 @@ COPY apps/redirect_api/mix.exs apps/redirect_api/mix.exs
 RUN mix deps.get --only prod && mix deps.compile
 
 COPY apps apps
+
+# Dashboard assets (Tailwind and esbuild binaries are downloaded here, so the build needs network).
+# Run from apps/write_api: the asset aliases and the output in priv/static live there.
+RUN cd apps/write_api && mix assets.setup && mix assets.deploy
+
 RUN mix compile

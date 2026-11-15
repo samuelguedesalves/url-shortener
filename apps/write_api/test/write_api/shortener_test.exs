@@ -54,10 +54,37 @@ defmodule WriteApi.ShortenerTest do
     assert {:ok, %{created_at: ^now}} = UrlStore.fetch(code)
   end
 
+  test "created_at is truncated to milliseconds, as Cassandra stores it" do
+    now = ~U[2026-11-09 13:00:00.123456Z]
+
+    assert {:ok, %{code: code, expires_at: expires_at}} =
+             Shortener.create(%{"url" => "https://example.com/a"}, now: now)
+
+    assert {:ok, %{created_at: created_at}} = UrlStore.fetch(code)
+    assert created_at == ~U[2026-11-09 13:00:00.123Z]
+    assert {_, 3} = created_at.microsecond
+    assert {_, 3} = expires_at.microsecond
+  end
+
+  test "returns created_at, truncated to milliseconds" do
+    now = ~U[2026-11-10 12:00:00.123456Z]
+
+    assert {:ok, link} = Shortener.create(%{"url" => "https://example.com/a"}, now: now)
+    assert link.created_at == ~U[2026-11-10 12:00:00.123Z]
+  end
+
   test "invalid params are still rejected when an owner_id is given" do
     assert Shortener.create(%{"url" => "not a url"}, owner_id: "user-1") ==
              {:error, :invalid_url}
 
     assert UrlStore.list_by_owner("user-1", 50) == {:ok, []}
+  end
+
+  test "the returned link reports is_custom_alias" do
+    assert {:ok, %{is_custom_alias: false}} =
+             Shortener.create(%{"url" => "https://example.com/a"})
+
+    assert {:ok, %{code: "flagged", is_custom_alias: true}} =
+             Shortener.create(%{"url" => "https://example.com/a", "custom_alias" => "flagged"})
   end
 end

@@ -4,3 +4,13 @@
 *.ez
 erl_crash.dump
 .elixir_ls/
+
+# Local environment for docker compose (copy .env.example)
+.env
+
+# Visual companion mockups (brainstorming scratch)
+.superpowers/
+
+# Built dashboard assets (`mix assets.build` / `mix assets.deploy` in apps/write_api)
+/apps/write_api/priv/static/assets/
+/apps/write_api/priv/static/cache_manifest.json

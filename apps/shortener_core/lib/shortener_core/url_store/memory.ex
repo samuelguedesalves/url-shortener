@@ -47,13 +47,14 @@ defmodule ShortenerCore.UrlStore.Memory do
   end
 
   @impl true
-  def list_by_owner(owner_id, limit) do
+  def list_by_owner(owner_id, limit, after_cursor) do
     Agent.get(__MODULE__, fn %{rows: rows, owners: owners} ->
       urls =
         owners
         |> Map.get(owner_id, [])
         |> Enum.map(&to_url(Map.fetch!(rows, &1)))
         |> Enum.sort(&newest_first?/2)
+        |> Enum.filter(&after?(&1, after_cursor))
         |> Enum.take(limit)
 
       {:ok, urls}
@@ -64,6 +65,16 @@ defmodule ShortenerCore.UrlStore.Memory do
 
   defp index(owners, %Url{owner_id: owner_id, code: code}),
     do: Map.update(owners, owner_id, [code], &[code | &1])
+
+  defp after?(_url, nil), do: true
+
+  defp after?(url, {created_at, code}) do
+    case DateTime.compare(url.created_at, created_at) do
+      :lt -> true
+      :gt -> false
+      :eq -> url.code > code
+    end
+  end
 
   defp newest_first?(a, b) do
     case DateTime.compare(a.created_at, b.created_at) do

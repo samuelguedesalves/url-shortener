@@ -1,5 +1,12 @@
 # Milestone 1 stack: Cassandra, Redis, write_api, redirect_api.
 # Cassandra runs one node with RF=1 locally; production uses RF=3 (ADR 0003).
+# Environment shared by both APIs. write-api adds its own secrets on top (see below); keep them
+# out of this map so redirect-api never receives them.
+x-service-env: &service_env
+  CASSANDRA_NODES: cassandra:9042
+  REDIS_URL: redis://redis:6379
+  BASE_URL: ${BASE_URL:-http://localhost:4002}
+
 services:
   cassandra:
     image: cassandra:5
@@ -43,10 +50,22 @@ services:
     build: .
     working_dir: /app/apps/write_api
     command: ["mix", "run", "--no-halt"]
-    environment: &service_env
-      CASSANDRA_NODES: cassandra:9042
-      REDIS_URL: redis://redis:6379
-      BASE_URL: http://localhost:4002
+    environment:
+      <<: *service_env
+      # Signs session cookies; write_api refuses to boot in prod without 32+ bytes. The default is a
+      # dev-only value; override it in .env (see .env.example).
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-session-secret-change-me-0123456789-abcdefghijklmnopqrstuvwxyz}
+      # Signs LiveView and CSRF tokens; write_api refuses to boot in prod without 64+ bytes. The default
+      # is a dev-only value; override it in .env.
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-dev-only-secret-key-base-change-me-0123456789-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      # Verifies Google ID tokens. Leave unset and every login fails closed; set it in your shell or .env.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      # The image runs MIX_ENV=prod over plain http://localhost, where browsers (Safari) drop Secure cookies.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # The origin this service is served from: the dashboard is a LiveView inside write-api, so
+      # CORS and the POST origin check allow this value. Behind the LAN override use http://<LAN_IP>:4001.
+      DASHBOARD_ORIGIN: ${DASHBOARD_ORIGIN:-http://localhost:4001}
     ports:
       - "127.0.0.1:4001:4001"
     depends_on: &service_deps

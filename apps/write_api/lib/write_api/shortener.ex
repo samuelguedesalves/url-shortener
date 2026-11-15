@@ -10,18 +10,26 @@ defmodule WriteApi.Shortener do
   alias ShortenerCore.{Cache, KeySource, Url, UrlStore}
   alias WriteApi.LinkParams
 
-  @type link :: %{code: String.t(), short_url: String.t(), expires_at: DateTime.t()}
+  @type link :: %{
+          code: String.t(),
+          short_url: String.t(),
+          expires_at: DateTime.t(),
+          is_custom_alias: boolean(),
+          created_at: DateTime.t()
+        }
   @type error :: LinkParams.error() | :alias_taken | :unavailable
 
   @doc """
   Creates a link from the body of `POST /urls`.
 
   Options: `:owner_id`, the `User.id` the link belongs to (default `nil`, an anonymous link),
-  and `:now`, the creation time (default the current time).
+  and `:now`, the creation time (default the current time), truncated to milliseconds.
   """
   @spec create(map(), keyword()) :: {:ok, link()} | {:error, error()}
   def create(params, opts \\ []) do
-    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    # Cassandra keeps milliseconds, and the list cursor encodes them: keep the stored value
+    # identical to a re-read so paging never skips or repeats a link.
+    now = opts |> Keyword.get_lazy(:now, &DateTime.utc_now/0) |> DateTime.truncate(:millisecond)
     owner_id = Keyword.get(opts, :owner_id)
 
     with {:ok, %{url: url, custom_alias: custom_alias, ttl_seconds: ttl}} <-
@@ -38,7 +46,7 @@ defmodule WriteApi.Shortener do
 
   defp create_custom(code, url, ttl, link) do
     case claim(code, true, link) do
-      :ok -> finish(code, url, ttl, link.expires_at)
+      :ok -> finish(code, true, url, ttl, link)
       {:error, :taken} -> {:error, :alias_taken}
       {:error, :unavailable} -> {:error, :unavailable}
     end
@@ -49,7 +57,7 @@ defmodule WriteApi.Shortener do
     with {:ok, code} <- KeySource.next_key() do
       case claim(code, false, link) do
         :ok ->
-          finish(code, url, ttl, link.expires_at)
+          finish(code, false, url, ttl, link)
 
         {:error, :taken} ->
           if attempt < max_key_attempts() do
@@ -74,13 +82,21 @@ defmodule WriteApi.Shortener do
     })
   end
 
-  defp finish(code, url, ttl, expires_at) do
+  defp finish(code, is_custom_alias, url, ttl, %{now: now, expires_at: expires_at}) do
     case UrlStore.put_destination(code, url, ttl) do
       :ok ->
         # Drop any negative entry cached before this code existed (ADR 0003). A cache error is
         # not fatal: the negative TTL is short.
         _ = Cache.delete(code)
-        {:ok, %{code: code, short_url: base_url() <> "/" <> code, expires_at: expires_at}}
+
+        {:ok,
+         %{
+           code: code,
+           short_url: base_url() <> "/" <> code,
+           expires_at: expires_at,
+           is_custom_alias: is_custom_alias,
+           created_at: now
+         }}
 
       {:error, :unavailable} ->
         {:error, :unavailable}

@@ -123,3 +123,5 @@ Each milestone is built and verified on its own before the next starts.
 ## 14. Out of scope
 
 Authentication and user accounts beyond an `owner_id`/API key, multi-region deployment, a real three-node Cassandra cluster, and Kubernetes deployment.
+
+Update (2026-11-10): sign-in with Google for the dashboard is now in scope, see [ADR 0007](../../adr/0007-sign-in-with-google-and-keep-sessions-in-a-signed-cookie.md). Accounts beyond that remain out of scope.

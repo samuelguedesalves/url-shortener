@@ -5,6 +5,9 @@ defmodule WriteApi.Application do
 
   @impl true
   def start(_type, _args) do
-    Supervisor.start_link([WriteApi.Endpoint], strategy: :one_for_one, name: WriteApi.Supervisor)
+    WriteApi.Config.validate!()
+
+    children = [WriteApi.Auth.Jwks, WriteApi.Endpoint]
+    Supervisor.start_link(children, strategy: :one_for_one, name: WriteApi.Supervisor)
   end
 end

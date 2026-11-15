@@ -4,22 +4,191 @@ defmodule WriteApi.UrlControllerTest do
   import Plug.Conn
   import Phoenix.ConnTest
 
-  alias ShortenerCore.{Cache, UrlStore}
+  alias ShortenerCore.{Cache, User, UrlStore, UserStore}
   alias WriteApi.Doubles
-  alias WriteApi.Doubles.{DestinationFailsStore, DownCache, DownStore, ScriptedKeySource}
+
+  alias WriteApi.Doubles.{
+    DestinationFailsStore,
+    DownCache,
+    DownStore,
+    DownUserStore,
+    ScriptedKeySource
+  }
+
+  alias WriteApi.Session
 
   @endpoint WriteApi.Endpoint
 
   setup do
     start_supervised!(UrlStore.Memory)
     start_supervised!(Cache.Memory)
+    start_supervised!(UserStore.Memory)
     :ok
+  end
+
+  defp user!(id) do
+    now = ~U[2026-11-01 10:00:00.000Z]
+
+    :ok =
+      UserStore.put(%User{
+        id: id,
+        google_id: "google-" <> id,
+        email: id <> "@example.com",
+        name: id,
+        picture_url: nil,
+        email_verified: true,
+        created_at: now,
+        updated_at: now
+      })
+  end
+
+  # A request carrying a session cookie issued as POST /auth/google does.
+  defp with_session(user_id, opts \\ []) do
+    cookie = Session.issue(build_conn(), user_id, opts).resp_cookies["session"].value
+    put_req_cookie(build_conn(), "session", cookie)
+  end
+
+  defp post_json_as(conn, body) do
+    conn
+    |> put_req_header("content-type", "application/json")
+    |> post("/urls", Jason.encode!(body))
   end
 
   defp post_json(body) do
     build_conn()
     |> put_req_header("content-type", "application/json")
     |> post("/urls", if(is_binary(body), do: body, else: Jason.encode!(body)))
+  end
+
+  describe "POST /urls ownership" do
+    test "POST /urls responds with exactly code, short_url, expires_at, is_custom_alias" do
+      body = json_response(post_json(%{"url" => "https://example.com/a"}), 201)
+
+      assert body |> Map.keys() |> Enum.sort() == [
+               "code",
+               "expires_at",
+               "is_custom_alias",
+               "short_url"
+             ]
+    end
+
+    test "the 201 body has exactly code, short_url, expires_at and is_custom_alias" do
+      conn = post_json(%{"url" => "https://example.com/a"})
+      body = json_response(conn, 201)
+      assert Enum.sort(Map.keys(body)) == ["code", "expires_at", "is_custom_alias", "short_url"]
+      assert body["is_custom_alias"] == false
+
+      conn = post_json(%{"url" => "https://example.com/a", "custom_alias" => "named-one"})
+      assert %{"code" => "named-one", "is_custom_alias" => true} = json_response(conn, 201)
+    end
+
+    test "a signed-in create is owned by the user and listed with is_custom_alias" do
+      user!("alice")
+      req = fn -> with_session("alice") end
+
+      %{"code" => generated} =
+        json_response(post_json_as(req.(), %{"url" => "https://example.com/g"}), 201)
+
+      conn =
+        post_json_as(req.(), %{"url" => "https://example.com/c", "custom_alias" => "alice-link"})
+
+      assert %{"code" => "alice-link", "is_custom_alias" => true} = json_response(conn, 201)
+
+      assert {:ok, %{owner_id: "alice"}} = UrlStore.fetch(generated)
+      assert {:ok, %{owner_id: "alice"}} = UrlStore.fetch("alice-link")
+
+      %{"links" => links} = json_response(get(req.(), "/urls"), 200)
+      flags = Map.new(links, &{&1["code"], &1["is_custom_alias"]})
+      assert flags == %{generated => false, "alice-link" => true}
+    end
+
+    test "an anonymous create has no owner and is listed for nobody" do
+      user!("alice")
+      %{"code" => code} = json_response(post_json(%{"url" => "https://example.com/a"}), 201)
+
+      assert {:ok, %{owner_id: nil}} = UrlStore.fetch(code)
+      assert %{"links" => []} = json_response(get(with_session("alice"), "/urls"), 200)
+    end
+
+    test "an owner_id in an anonymous body is ignored" do
+      user!("alice")
+      body = %{"url" => "https://example.com/a", "owner_id" => "alice"}
+      %{"code" => code} = json_response(post_json(body), 201)
+
+      assert {:ok, %{owner_id: nil}} = UrlStore.fetch(code)
+      assert %{"links" => []} = json_response(get(with_session("alice"), "/urls"), 200)
+    end
+
+    test "an owner_id in a signed-in body is ignored in favour of the session user" do
+      user!("alice")
+      user!("bob")
+      body = %{"url" => "https://example.com/a", "owner_id" => "bob"}
+      %{"code" => code} = json_response(post_json_as(with_session("alice"), body), 201)
+
+      assert {:ok, %{owner_id: "alice"}} = UrlStore.fetch(code)
+      assert %{"links" => []} = json_response(get(with_session("bob"), "/urls"), 200)
+    end
+
+    test "a tampered cookie still creates an anonymous link with 201" do
+      user!("alice")
+      cookie = Session.issue(build_conn(), "alice").resp_cookies["session"].value
+
+      conn =
+        build_conn()
+        |> put_req_cookie("session", cookie <> "x")
+        |> post_json_as(%{"url" => "https://example.com/a"})
+
+      %{"code" => code} = json_response(conn, 201)
+      assert {:ok, %{owner_id: nil}} = UrlStore.fetch(code)
+    end
+
+    test "an expired cookie still creates an anonymous link with 201" do
+      user!("alice")
+      eight_days_ago = DateTime.add(DateTime.utc_now(), -8 * 86_400, :second)
+
+      conn =
+        "alice"
+        |> with_session(now: eight_days_ago)
+        |> post_json_as(%{"url" => "https://example.com/a"})
+
+      %{"code" => code} = json_response(conn, 201)
+      assert {:ok, %{owner_id: nil}} = UrlStore.fetch(code)
+    end
+
+    test "a cookie for a deleted user creates an anonymous link with 201" do
+      conn = "ghost" |> with_session() |> post_json_as(%{"url" => "https://example.com/a"})
+      %{"code" => code} = json_response(conn, 201)
+      assert {:ok, %{owner_id: nil}} = UrlStore.fetch(code)
+    end
+
+    test "a user-store outage while reading a present cookie is 503" do
+      user!("alice")
+      conn = with_session("alice")
+      Doubles.swap_env(:shortener_core, :user_store, DownUserStore)
+
+      conn = post_json_as(conn, %{"url" => "https://example.com/a"})
+      assert %{"error" => "unavailable"} = json_response(conn, 503)
+    end
+
+    test "a taken alias is 409 while signed in" do
+      user!("alice")
+      body = %{"url" => "https://example.com/a", "custom_alias" => "taken-2"}
+      assert json_response(post_json(body), 201)
+
+      conn = post_json_as(with_session("alice"), body)
+      assert %{"error" => "alias_taken"} = json_response(conn, 409)
+    end
+
+    for alias_name <- ~w(auth me login logout links Me LOGIN) do
+      test "the reserved alias #{alias_name} is 422 invalid_alias, anonymous and signed in" do
+        body = %{"url" => "https://example.com/a", "custom_alias" => unquote(alias_name)}
+        assert %{"error" => "invalid_alias"} = json_response(post_json(body), 422)
+
+        user!("alice")
+        conn = post_json_as(with_session("alice"), body)
+        assert %{"error" => "invalid_alias"} = json_response(conn, 422)
+      end
+    end
   end
 
   describe "POST /urls with a generated code" do

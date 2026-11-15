@@ -28,6 +28,14 @@ defmodule ShortenerCore.UrlStore.Cassandra do
 
   @list_codes "SELECT code FROM urls_by_user WHERE owner_id = ? LIMIT ?"
 
+  # The table clusters by (created_at DESC, code ASC), so "after {c, k}" is two ranges: the rest
+  # of timestamp c (code > k), then everything older than c.
+  @list_codes_same_time """
+  SELECT code FROM urls_by_user WHERE owner_id = ? AND created_at = ? AND code > ? LIMIT ?
+  """
+
+  @list_codes_older "SELECT code FROM urls_by_user WHERE owner_id = ? AND created_at < ? LIMIT ?"
+
   @fetch """
   SELECT code, long_url, owner_id, is_custom_alias, created_at, expires_at
   FROM urls WHERE code = ?
@@ -76,10 +84,31 @@ defmodule ShortenerCore.UrlStore.Cassandra do
   end
 
   @impl true
-  def list_by_owner(owner_id, limit) when is_integer(limit) and limit > 0 do
-    case execute(@list_codes, [owner_id, limit], []) do
-      {:ok, page} -> page |> Enum.map(& &1["code"]) |> fetch_all()
+  def list_by_owner(owner_id, limit, after_cursor) when is_integer(limit) and limit > 0 do
+    case list_codes(owner_id, limit, after_cursor) do
+      {:ok, codes} -> fetch_all(codes)
       {:error, error} -> log_error("list_by_owner", "owner " <> owner_id, error)
+    end
+  end
+
+  defp list_codes(owner_id, limit, nil), do: query_codes(@list_codes, [owner_id, limit])
+
+  defp list_codes(owner_id, limit, {created_at, code}) do
+    with {:ok, same_time} <-
+           query_codes(@list_codes_same_time, [owner_id, created_at, code, limit]),
+         {:ok, older} <- older_codes(owner_id, created_at, limit - length(same_time)) do
+      {:ok, same_time ++ older}
+    end
+  end
+
+  defp older_codes(_owner_id, _created_at, 0), do: {:ok, []}
+
+  defp older_codes(owner_id, created_at, remaining),
+    do: query_codes(@list_codes_older, [owner_id, created_at, remaining])
+
+  defp query_codes(statement, params) do
+    with {:ok, page} <- execute(statement, params, []) do
+      {:ok, Enum.map(page, & &1["code"])}
     end
   end
 

@@ -1,0 +1,17 @@
+# Local-network override. Usage:
+#   LAN_IP=192.168.2.163 docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
+# Publishes only the two APIs on all interfaces. Cassandra and Redis stay on 127.0.0.1.
+x-lan-env: &lan_env
+  BASE_URL: http://${LAN_IP:?set LAN_IP}:4002
+
+services:
+  write-api:
+    environment:
+      <<: *lan_env
+    ports: !override
+      - "0.0.0.0:4001:4001"
+  redirect-api:
+    environment:
+      <<: *lan_env
+    ports: !override
+      - "0.0.0.0:4002:4002"

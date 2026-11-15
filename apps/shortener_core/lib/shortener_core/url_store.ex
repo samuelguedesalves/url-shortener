@@ -11,7 +11,7 @@ defmodule ShortenerCore.UrlStore do
 
   A link belongs to the user whose `User.id` is in `Url.owner_id` (`nil` for anonymous links).
   `claim/1` also adds an owned code to that owner's index, after the claim succeeded, so the
-  index never lists a code someone else holds. `list_by_owner/2` reads the index. An index
+  index never lists a code someone else holds. `list_by_owner/3` reads the index. An index
   write that fails after the claim returns `{:error, :unavailable}` and burns the code, like
   any failure after the claim (ADR 0004).
 
@@ -28,14 +28,24 @@ defmodule ShortenerCore.UrlStore do
             ) ::
               :ok | {:error, :unavailable}
   @callback fetch(code :: String.t()) :: {:ok, Url.t()} | :not_found | {:error, :unavailable}
-  @doc "The owner's links, newest first, at most `limit`. An expired link has `long_url: nil`."
-  @callback list_by_owner(owner_id :: String.t(), limit :: pos_integer()) ::
-              {:ok, [Url.t()]} | {:error, :unavailable}
+  @doc """
+  The owner's links, newest first (`created_at` desc, then `code` asc), at most `limit`. An
+  expired link has `long_url: nil`. `after` is the `{created_at, code}` of the last link of the
+  previous page; only links strictly after it are returned.
+  """
+  @callback list_by_owner(
+              owner_id :: String.t(),
+              limit :: pos_integer(),
+              after_cursor :: nil | {DateTime.t(), String.t()}
+            ) :: {:ok, [Url.t()]} | {:error, :unavailable}
 
   def claim(%Url{} = url), do: impl().claim(url)
   def put_destination(code, long_url, ttl), do: impl().put_destination(code, long_url, ttl)
   def fetch(code), do: impl().fetch(code)
   def list_by_owner(owner_id, limit), do: impl().list_by_owner(owner_id, limit)
+
+  def list_by_owner(owner_id, limit, after_cursor \\ nil),
+    do: impl().list_by_owner(owner_id, limit, after_cursor)
 
   defp impl, do: Application.fetch_env!(:shortener_core, :url_store)
 end

@@ -17,7 +17,7 @@ defmodule RedirectApi.RedirectControllerTest do
     @impl true
     def fetch(_), do: {:error, :unavailable}
     @impl true
-    def list_by_owner(_, _), do: {:error, :unavailable}
+    def list_by_owner(_, _, _), do: {:error, :unavailable}
   end
 
   defmodule DownCache do
